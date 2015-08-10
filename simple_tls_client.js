@@ -57,21 +57,21 @@ function parseFrame(reader, state) {
   var type = reader.peekBytes(0, 1).readUInt8(0);
   switch(type) {
   case 0x14:
-    console.log('ChangeCipherSpec');
+    console.log('ChangeCipherSpec Received');
     assert(state.keyblock_json.master_secret, 'Not Key Negotiated Yet');
     reader.readBytes(6);
     state.recv_encrypted = true;
     break;
   case 0x15:
-    console.log('TLS Alert');
+    console.log('TLS Alert Received');
     // ToDo implement
+    return;
     break;
   case 0x16:
-    console.log('Handshake');
     reader = parseHandshake(reader, state);
     break;
   case 0x17:
-    console.log('Application Data');
+    console.log('Application Data Received');
     var data_json = SecCampTLS.parseApplicationData(reader);
     console.log(data_json.data);
     break;
@@ -87,21 +87,27 @@ function parseHandshake(reader, state) {
   case 0x02:
     if (!SecCampTLS.parseServerHello(reader, state))
       return null;
+
+    console.log('Server Hello Received');
     break;
   case 0x0b:
     if (!SecCampTLS.parseCertificate(reader, state))
       return null;
+
+    console.log('Certificate Received');
     break;
   case 0x0e:
     if (!SecCampTLS.parseServerHelloDone(reader, state))
       return null;
 
-    SecCampTLS.sendClientFrame(state);
+    console.log('ServerHelloDone Received');
+    sendClientFrame(state);
     break;
   case 0x14:
     if(!SecCampTLS.parseServerFinished(reader, state))
       return null;
 
+    console.log('ServerFinished Received');
     console.log('Handshake Completed');
     state.socket.emit('secureConnection');
     break;
@@ -110,4 +116,13 @@ function parseHandshake(reader, state) {
   }
 
   return reader;
+}
+
+function sendClientFrame(state) {
+  SecCampTLS.sendClientKeyExchange(state);
+  console.log('ClientKeyExchange Sent');
+  SecCampTLS.sendChangeCipherSpec(state);
+  console.log('ChangeCipherSpec Sent');
+  SecCampTLS.sendClientFinished(state);
+  console.log('ClientFinished Sent');
 }
