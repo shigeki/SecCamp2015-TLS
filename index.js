@@ -318,25 +318,53 @@ function DecryptAEAD(reader, state) {
   return new DataReader(Buffer.concat([record_header_type_version, length, clear, buf]));
 }
 
+exports.createPreMasterSecretRSAKeyExchange = createPreMasterSecretRSAKeyExchange;
+function createPreMasterSecretRSAKeyExchange(state) {
+  var pre_master_secret = Buffer.concat([state.handshake.clienthello_json.version, crypto.randomBytes(46)]);
+  return pre_master_secret;
+}
+
+exports.createKeyBlock = createKeyBlock;
+function createKeyBlock(pre_master_secret, state) {
+  var keyblock_json = KDF(pre_master_secret, state.handshake.clienthello_json, state.handshake.serverhello_json);
+  return keyblock_json;
+}
+
+exports.sendClientKeyExchange = sendClientKeyExchange;
+function sendClientKeyExchange(state) {
+  var pre_master_secret = createPreMasterSecretRSAKeyExchange(state);
+  state.keyblock_json = createKeyBlock(pre_master_secret, state);
+  var clientkeyexchange_json = {
+    pre_master_secret: pre_master_secret,
+    pubkey: require('fs').readFileSync(__dirname + '/pubkey.pem')
+  };
+  var clientkeyexchange = createClientKeyExchange(clientkeyexchange_json, state);
+  sendTLSFrame(clientkeyexchange, state);
+}
+
+exports.sendChangeCipherSpec = sendChangeCipherSpec;
+function sendChangeCipherSpec(state) {
+  var changecipherspec = createChangeCipherSpec();
+  sendTLSFrame(changecipherspec, state);
+  state.send_encrypted = true;
+}
+
+exports.sendClientFinished = sendClientFinished;
+function sendClientFinished(state) {
+  var clientfinished_json = {
+    master_secret: state.keyblock_json.master_secret,
+    handshake_message_list: state.handshake_message_list
+  };
+  var clientfinished = createClientFinished(clientfinished_json, state);
+  sendTLSFrame(clientfinished, state);
+}
+
 exports.sendClientFrame = sendClientFrame;
 function sendClientFrame(state) {
-    var pre_master_secret = Buffer.concat([state.handshake.clienthello_json.version, crypto.randomBytes(46)]);
-    state.keyblock_json = KDF(pre_master_secret, state.handshake.clienthello_json, state.handshake.serverhello_json);
-    var clientkeyexchange_json = {
-      pre_master_secret: pre_master_secret,
-      pubkey: require('fs').readFileSync(__dirname + '/pubkey.pem')
-    };
-    var clientkeyexchange = createClientKeyExchange(clientkeyexchange_json, state);
-    sendTLSFrame(clientkeyexchange, state);
-    var changecipherspec = createChangeCipherSpec();
-    sendTLSFrame(changecipherspec, state);
-    state.send_encrypted = true;
-    var clientfinished_json = {
-      master_secret: state.keyblock_json.master_secret,
-      handshake_message_list: state.handshake_message_list
-    };
-    var clientfinished = createClientFinished(clientfinished_json, state);
-    sendTLSFrame(clientfinished, state);
+  sendClientKeyExchange(state);
+  sendChangeCipherSpec(state);
+  state.send_encrypted = true;
+  sendClientFinished(state);
 }
 
 exports.sendTLSFrame = sendTLSFrame;
