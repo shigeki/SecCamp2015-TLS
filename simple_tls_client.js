@@ -2,7 +2,7 @@ var assert = require('assert');
 var net = require('net');
 var crypto = require('crypto');
 var DataReader = require('seccamp2015-data-reader').DataReader;
-var SecCampTLS = require('seccamp2015-TLS.js');
+var SecCampTLS = require('seccamp2015-tls');
 
 function TLSState(socket, is_server) {
   this.is_server = is_server;
@@ -25,7 +25,7 @@ var clienthello_json = {
   compression: new Buffer('00', 'hex')
 };
 
-var client = net.connect({host: 'localhost', port: 443}, function() {
+var client = net.connect({host: 'tls.koulayer.com', port: 443}, function() {
   var state = new TLSState(client, false);
 
   var remaining = new Buffer(0);
