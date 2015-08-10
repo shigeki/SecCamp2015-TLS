@@ -318,6 +318,7 @@ function DecryptAEAD(reader, state) {
   return new DataReader(Buffer.concat([record_header_type_version, length, clear, buf]));
 }
 
+exports.sendClientFrame = sendClientFrame;
 function sendClientFrame(state) {
     var pre_master_secret = Buffer.concat([state.handshake.clienthello_json.version, crypto.randomBytes(46)]);
     state.keyblock_json = KDF(pre_master_secret, state.handshake.clienthello_json, state.handshake.serverhello_json);
