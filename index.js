@@ -324,7 +324,7 @@ function sendClientFrame(state) {
     state.keyblock_json = KDF(pre_master_secret, state.handshake.clienthello_json, state.handshake.serverhello_json);
     var clientkeyexchange_json = {
       pre_master_secret: pre_master_secret,
-      pubkey: require('fs').readFileSync('/home/ohtsu/pubkey.pem')
+      pubkey: require('fs').readFileSync(__dirname + '/pubkey.pem')
     };
     var clientkeyexchange = createClientKeyExchange(clientkeyexchange_json, state);
     sendTLSFrame(clientkeyexchange, state);
