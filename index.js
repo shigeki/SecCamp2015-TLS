@@ -34,6 +34,7 @@ function writeVector(data, floor, ceiling) {
   return Buffer.concat([length, data]);
 }
 
+exports.checkRecordHeader = checkRecordHeader;
 function checkRecordHeader(reader) {
   if (5 > reader.bytesRemaining())
     return null;
