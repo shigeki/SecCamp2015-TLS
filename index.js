@@ -204,6 +204,7 @@ function parseApplicationData(reader) {
   };
 }
 
+exports.P_hash = P_hash;
 function P_hash(algo, secret, seed, size) {
   var result = (new Buffer(size)).fill(0);
   var hmac = crypto.createHmac(algo, secret);
@@ -230,11 +231,13 @@ function P_hash(algo, secret, seed, size) {
   return result;
 }
 
+exports.PRF12 = PRF12;
 function PRF12(secret, label, seed, size) {
   var newSeed = Buffer.concat([new Buffer(label), seed]);
   return P_hash('sha256', secret, newSeed, size);
 }
 
+exports.KDF = KDF;
 function KDF(pre_master_secret, clienthello_json, serverhello_json) {
   var client_random = clienthello_json.random;
   var server_random = serverhello_json.random;
