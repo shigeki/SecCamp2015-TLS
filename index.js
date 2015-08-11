@@ -20,6 +20,7 @@ var type = {
   handshake: 0x16,
   application: 0x17
 };
+exports.ContentType = type;
 
 // TLS HandshakeType List
 var handshake_type = {
@@ -31,6 +32,7 @@ var handshake_type = {
   clientkeyexchange: 0x10,
   finished: 0x14
 };
+exports.HandshakeType = handshake_type;
 
 // write data to variable vector format with length field
 function writeVector(data, floor, ceiling) {
