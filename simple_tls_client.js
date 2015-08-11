@@ -4,6 +4,10 @@ var crypto = require('crypto');
 var DataReader = require('seccamp2015-data-reader').DataReader;
 var SecCampTLS = require('seccamp2015-tls');
 
+var ContentType = SecCampTLS.ContentType;
+var HandshakeType = SecCampTLS.HandshakeType;
+
+// TLS State Object to store secure parameters
 function TLSState(socket, is_server) {
   this.is_server = is_server;
   this.socket = socket;
@@ -17,6 +21,7 @@ function TLSState(socket, is_server) {
   this.read_seq = (new Buffer(8)).fill(0);
 }
 
+// Initial ClientHello Data
 var clienthello_json = {
   version: new Buffer('0303', 'hex'),
   random: crypto.randomBytes(32),
@@ -25,52 +30,64 @@ var clienthello_json = {
   compression: new Buffer('00', 'hex')
 };
 
-var client = net.connect({host: 'tls.koulayer.com', port: 443}, function() {
+var host = 'tls.koulayer.com';
+var port = 443;
+
+var client = net.connect({host: host, port: port}, function() {
   var state = new TLSState(client, false);
 
+  // initial remaining buffer is zero
   var remaining = new Buffer(0);
   client.on('data', function(c) {
+    // create data reader with cocatinating of remaining buffer and receiving data
     var reader = new DataReader(Buffer.concat([remaining, c]));
+    // parse TLS Frame from reader
     parseFrame(reader, state);
+    // store remaining buffer after parsing TLS frame
     remaining = reader.readBytes(reader.bytesRemaining());
   });
 
   client.on('secureConnection', function() {
+    // After handshake completed, stdin data is sent to server with encryption
     process.stdin.on('data', function(c) {
       var applicationData = SecCampTLS.createApplicationData(c);
       SecCampTLS.sendTLSFrame(applicationData, state);
     });
   });
 
+  // send initial ClientHello to server
   var clienthello = SecCampTLS.createClientHello(clienthello_json, state);
   SecCampTLS.sendTLSFrame(clienthello, state);
 });
 
 
 function parseFrame(reader, state) {
+  // The more than the size of header record are needed to parse TLS frame
   if (!reader || 5 > reader.bytesRemaining())
     return;
 
+  // After ChangeCipherSpec received, all received frame are encrypted.
   if (state.recv_encrypted)
     reader = SecCampTLS.DecryptAEAD(reader, state);
 
   var type = reader.peekBytes(0, 1).readUInt8(0);
   switch(type) {
-  case 0x14:
+  case ContentType.changecipherspec:
     console.log('ChangeCipherSpec Received');
+    // Check KeyExchange was already completed.
     assert(state.keyblock_json.master_secret, 'Not Key Negotiated Yet');
     reader.readBytes(6);
     state.recv_encrypted = true;
     break;
-  case 0x15:
+  case ContentType.alert:
     console.log('TLS Alert Received');
-    // ToDo implement
+    // ToDo implement. just return.
     return;
     break;
-  case 0x16:
+  case ContentType.handshake:
     reader = parseHandshake(reader, state);
     break;
-  case 0x17:
+  case ContentType.application:
     console.log('Application Data Received');
     var data_json = SecCampTLS.parseApplicationData(reader);
     console.log(data_json.data);
@@ -81,34 +98,37 @@ function parseFrame(reader, state) {
   parseFrame(reader, state);
 };
 
+// if reader does not have enough length to be parsed, then return null;
+// This puts all data buffer of reader into remaining buffer.
 function parseHandshake(reader, state) {
   var type = reader.peekBytes(5, 6).readUInt8(0);
   switch(type) {
-  case 0x02:
+  case HandshakeType.serverhello:
     if (!SecCampTLS.parseServerHello(reader, state))
       return null;
 
     console.log('Server Hello Received');
     break;
-  case 0x0b:
+  case HandshakeType.certificate:
     if (!SecCampTLS.parseCertificate(reader, state))
       return null;
 
     console.log('Certificate Received');
     break;
-  case 0x0e:
+  case HandshakeType.serverhellodone:
     if (!SecCampTLS.parseServerHelloDone(reader, state))
       return null;
 
     console.log('ServerHelloDone Received');
     sendClientFrame(state);
     break;
-  case 0x14:
+  case HandshakeType.finished:
     if(!SecCampTLS.parseServerFinished(reader, state))
       return null;
 
     console.log('ServerFinished Received');
     console.log('Handshake Completed');
+    // After handshake complete, secureConnection event is emitted to parse stdin
     state.socket.emit('secureConnection');
     break;
   default:
