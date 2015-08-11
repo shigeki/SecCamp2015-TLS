@@ -86,7 +86,7 @@ function createHandshake(type, data) {
 
 exports.createClientHello = createClientHello;
 function createClientHello(json, state) {
-  state.handshake.clienthello_json = json;
+  state.handshake.clienthello = json;
   var version = json.version;
   var random = json.random;
   var session_id = writeVector(json.session_id, 0, 32);
@@ -120,7 +120,7 @@ function parseServerHello(reader, state) {
   var cipher = reader.readBytes(2);
   var compression = reader.readBytes(1);
 
-  state.handshake.serverhello_json = {
+  return {
     record_header: record_header,
     type: type,
     length: length,
@@ -130,7 +130,6 @@ function parseServerHello(reader, state) {
     cipher: cipher,
     compression: compression
   };
-  return true;
 }
 
 exports.parseCertificate = parseCertificate;
@@ -150,13 +149,12 @@ function parseCertificate(reader, state) {
     certlist.push(cert);
   }
 
-  state.handshake.certificate_json = {
+  return {
     record_header: record_header,
     type: type,
     length: length,
     certlist: certlist
   };
-  return true;
 }
 
 exports.parseServerHelloDone = parseServerHelloDone;
@@ -170,12 +168,11 @@ function parseServerHelloDone(reader, state) {
   var type = reader.readBytes(1).readUInt8(0);
   var length = reader.readBytes(3).readUIntBE(0, 3);
 
-  state.handshake.serverhellodone_json = {
+  return {
     record_header: record_header,
     type: type,
     length: length
   };
-  return true;
 }
 
 exports.parseServerFinished = parseServerFinished;
@@ -197,7 +194,7 @@ function parseServerFinished(reader, state) {
   // Store Handshake data after hash caluclated
   state.handshake_message_list.push(handshake_msg_buf);
 
-  var master_secret = state.keyblock_json.master_secret;
+  var master_secret = state.keyblock.master_secret;
 
   // obtain session hash
   var r = PRF12(master_secret, "server finished", message_hash, 12);
@@ -205,13 +202,12 @@ function parseServerFinished(reader, state) {
   // Handshake integrity check
   assert(r.equals(verify_data));
 
-  state.handshake.serverfinished_json = {
+  return {
     record_header: record_header,
     type: type,
     length: length,
     verify_data: verify_data
   };
-  return true;
 }
 
 exports.parseApplicationData = parseApplicationData;
@@ -283,7 +279,7 @@ function KDF(pre_master_secret, client_random, server_random) {
 
 exports.createClientKeyExchange = createClientKeyExchange;
 function createClientKeyExchange(json, state) {
-  state.handshake.clientkeyexchange_json = json;
+  state.handshake.clientkeyexchange = json;
   var public_key = json.pubkey;
   var pre_master_secret = json.pre_master_secret;
   var encrypted = crypto.publicEncrypt({
@@ -302,7 +298,7 @@ function createChangeCipherSpec() {
 
 exports.createClientFinished = createClientFinished;
 function createClientFinished(json, state) {
-  state.handshake.clientfinished_json = json;
+  state.handshake.clientfinished = json;
   // create session hash
   var shasum = crypto.createHash('sha256');
   shasum.update(Buffer.concat(json.handshake_message_list));
@@ -326,22 +322,22 @@ function createPreMasterSecretRSAKeyExchange(version) {
 
 exports.createKeyBlock = createKeyBlock;
 function createKeyBlock(pre_master_secret, client_random, server_random) {
-  var keyblock_json = KDF(pre_master_secret, client_random, server_random);
-  return keyblock_json;
+  var keyblock = KDF(pre_master_secret, client_random, server_random);
+  return keyblock;
 }
 
 exports.sendClientKeyExchange = sendClientKeyExchange;
 function sendClientKeyExchange(state) {
-  var version = state.handshake.clienthello_json.version;
-  var client_random = state.handshake.clienthello_json.random;
-  var server_random = state.handshake.serverhello_json.random;
+  var version = state.handshake.clienthello.version;
+  var client_random = state.handshake.clienthello.random;
+  var server_random = state.handshake.serverhello.random;
   var pre_master_secret = createPreMasterSecretRSAKeyExchange(version);
-  state.keyblock_json = createKeyBlock(pre_master_secret, client_random, server_random);
-  var clientkeyexchange_json = {
+  state.keyblock = createKeyBlock(pre_master_secret, client_random, server_random);
+  var clientkeyexchange = {
     pre_master_secret: pre_master_secret,
     pubkey: require('fs').readFileSync(__dirname + '/pubkey.pem')
   };
-  var clientkeyexchange = createClientKeyExchange(clientkeyexchange_json, state);
+  var clientkeyexchange = createClientKeyExchange(clientkeyexchange, state);
   sendTLSFrame(clientkeyexchange, state);
 }
 
@@ -355,11 +351,11 @@ function sendChangeCipherSpec(state) {
 
 exports.sendClientFinished = sendClientFinished;
 function sendClientFinished(state) {
-  var clientfinished_json = {
-    master_secret: state.keyblock_json.master_secret,
+  var clientfinished = {
+    master_secret: state.keyblock.master_secret,
     handshake_message_list: state.handshake_message_list
   };
-  var clientfinished = createClientFinished(clientfinished_json, state);
+  var clientfinished = createClientFinished(clientfinished, state);
   sendTLSFrame(clientfinished, state);
 }
 
@@ -389,8 +385,8 @@ function DecryptAEAD(reader, state) {
 
   record_header.writeUIntBE(encrypted.length, 3, 2);
 
-  var write_key = state.keyblock_json.server_write_key;
-  var write_iv = state.keyblock_json.server_write_IV;
+  var write_key = state.keyblock.server_write_key;
+  var write_iv = state.keyblock.server_write_IV;
   var iv = Buffer.concat([write_iv.slice(0,4), nonce_explicit]);
   var aad = Buffer.concat([state.read_seq, record_header]);
   var clear = Decrypt(encrypted, aad, write_key, iv, tag);
@@ -420,8 +416,8 @@ function Encrypt(plain, key, iv, aad) {
 
 exports.EncryptAEAD = EncryptAEAD;
 function EncryptAEAD(frame, state) {
-  var key = state.keyblock_json.client_write_key;
-  var iv = Buffer.concat([state.keyblock_json.client_write_IV.slice(0,4), state.nonce_explicit]);
+  var key = state.keyblock.client_write_key;
+  var iv = Buffer.concat([state.keyblock.client_write_IV.slice(0,4), state.nonce_explicit]);
   var record_header = frame.slice(0, 5);
   var aad = Buffer.concat([state.write_seq, record_header]);
 

@@ -4,6 +4,7 @@ var crypto = require('crypto');
 var DataReader = require('seccamp2015-data-reader').DataReader;
 var SecCampTLS = require('seccamp2015-tls');
 
+
 var ContentType = SecCampTLS.ContentType;
 var HandshakeType = SecCampTLS.HandshakeType;
 
@@ -13,7 +14,7 @@ function TLSState(socket, is_server) {
   this.socket = socket;
   this.send_encrypted = false;
   this.recv_encrypted = false;
-  this.keyblock_json = {};
+  this.keyblock = {};
   this.handshake_message_list = [];
   this.handshake = {};
   this.nonce_explicit = crypto.randomBytes(8);
@@ -22,7 +23,7 @@ function TLSState(socket, is_server) {
 }
 
 // Initial ClientHello Data
-var clienthello_json = {
+var clienthello = {
   version: new Buffer('0303', 'hex'),
   random: crypto.randomBytes(32),
   session_id: new Buffer(0),
@@ -56,8 +57,8 @@ var client = net.connect({host: host, port: port}, function() {
   });
 
   // send initial ClientHello to server
-  var clienthello = SecCampTLS.createClientHello(clienthello_json, state);
-  SecCampTLS.sendTLSFrame(clienthello, state);
+  var clienthelloFrame = SecCampTLS.createClientHello(clienthello, state);
+  SecCampTLS.sendTLSFrame(clienthelloFrame, state);
 });
 
 
@@ -75,7 +76,7 @@ function parseFrame(reader, state) {
   case ContentType.changecipherspec:
     console.log('ChangeCipherSpec Received');
     // Check KeyExchange was already completed.
-    assert(state.keyblock_json.master_secret, 'Not Key Negotiated Yet');
+    assert(state.keyblock.master_secret, 'Not Key Negotiated Yet');
     reader.readBytes(6);
     state.recv_encrypted = true;
     break;
@@ -89,8 +90,8 @@ function parseFrame(reader, state) {
     break;
   case ContentType.application:
     console.log('Application Data Received');
-    var data_json = SecCampTLS.parseApplicationData(reader);
-    console.log(data_json.data);
+    var data = SecCampTLS.parseApplicationData(reader);
+    console.log(data.data);
     break;
   default:
     throw new Error('Unknown msg type:' + type);
@@ -101,29 +102,30 @@ function parseFrame(reader, state) {
 // if reader does not have enough length to be parsed, then return null;
 // This puts all data buffer of reader into remaining buffer.
 function parseHandshake(reader, state) {
+  var json = state.handshake;
   var type = reader.peekBytes(5, 6).readUInt8(0);
   switch(type) {
   case HandshakeType.serverhello:
-    if (!SecCampTLS.parseServerHello(reader, state))
+    if (!(json.serverhello = SecCampTLS.parseServerHello(reader, state)))
       return null;
 
     console.log('Server Hello Received');
     break;
   case HandshakeType.certificate:
-    if (!SecCampTLS.parseCertificate(reader, state))
+    if (!(json.certificate = SecCampTLS.parseCertificate(reader, state)))
       return null;
 
     console.log('Certificate Received');
     break;
   case HandshakeType.serverhellodone:
-    if (!SecCampTLS.parseServerHelloDone(reader, state))
+    if (!(json.serverhellodone = SecCampTLS.parseServerHelloDone(reader, state)))
       return null;
 
     console.log('ServerHelloDone Received');
     sendClientFrame(state);
     break;
   case HandshakeType.finished:
-    if(!SecCampTLS.parseServerFinished(reader, state))
+    if(!(json.serverfinished = SecCampTLS.parseServerFinished(reader, state)))
       return null;
 
     console.log('ServerFinished Received');
@@ -134,7 +136,6 @@ function parseHandshake(reader, state) {
   default:
     throw new Error('Unknown handshake type:' +  type);
   }
-
   return reader;
 }
 
