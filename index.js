@@ -1,6 +1,7 @@
 var assert = require('assert'), crypto = require('crypto');
 var DataReader = require('seccamp2015-data-reader').DataReader;
 
+// Increment Number of Big Endian Bufffer
 function incSeq(buf){
   var i;
   for(i=buf.length-1; i >= 0;i--){
@@ -12,6 +13,7 @@ function incSeq(buf){
   }
 }
 
+// TLS Content Type List
 var type = {
   changecipherspec: 0x14,
   alert: 0x15,
@@ -19,12 +21,18 @@ var type = {
   application: 0x17
 };
 
+// TLS HandshakeType List
 var handshake_type = {
   clienthello: 0x01,
+  serverhello: 0x02,
+  certificate: 0x0b,
+  serverkeyexchange: 0x0c,
+  serverhellodone: 0x0e,
   clientkeyexchange: 0x10,
   finished: 0x14
 };
 
+// write data to variable vector format with length field
 function writeVector(data, floor, ceiling) {
   assert(data.length >= floor);
   assert(ceiling >= data.length);
@@ -34,6 +42,7 @@ function writeVector(data, floor, ceiling) {
   return Buffer.concat([length, data]);
 }
 
+// check if reader has enough length to parse
 exports.checkRecordHeader = checkRecordHeader;
 function checkRecordHeader(reader) {
   if (5 > reader.bytesRemaining())
@@ -46,15 +55,17 @@ function checkRecordHeader(reader) {
   return true;
 }
 
+// Create record buffer with adding header of TLS1.2
 function createRecord(type, data) {
   var header = new Buffer(5);
   header[0] = type;
   header[1] = 0x03;
-  header[2] = 0x03;
+  header[2] = 0x03; // Explicitly used TLS1.2
   header.writeUIntBE(data.length, 3, 2);
   return Buffer.concat([header, data]);
 }
 
+// return json format of record header
 function parseRecordHeader(reader) {
   assert(reader.bytesRemaining() >= 5);
   var type = reader.readBytes(1).readUInt8(0);
@@ -63,6 +74,7 @@ function parseRecordHeader(reader) {
   return {type: type, version: version, length: length};
 }
 
+// add Handshake header in front of data
 function createHandshake(type, data) {
   var header = new Buffer(4);
   header[0] = type;
@@ -78,8 +90,17 @@ function createClientHello(json, state) {
   var session_id = writeVector(json.session_id, 0, 32);
   var cipher_suites = writeVector(Buffer.concat(json.cipher_suites), 2, 1 << 16 - 2);
   var compression = writeVector(json.compression, 0, 1 << 8 -1);
-  var handshake = createHandshake(handshake_type.clienthello, Buffer.concat([version, random, session_id, cipher_suites, compression]));
+  var handshake = createHandshake(
+    handshake_type.clienthello,
+    Buffer.concat([version, random, session_id, cipher_suites, compression])
+  );
   return createRecord(type.handshake, handshake);
+}
+
+function storeHandshakeData(reader, length, state) {
+  // store handshake buffer data for session hash in Finished
+  var handshake_msg_buf = reader.peekBytes(0, length);
+  state.handshake_message_list.push(handshake_msg_buf);
 }
 
 exports.parseServerHello = parseServerHello;
@@ -88,9 +109,7 @@ function parseServerHello(reader, state) {
     return null;
 
   var record_header = parseRecordHeader(reader);
-  var handshake_msg_buf = reader.peekBytes(0, record_header.length);
-  state.handshake_message_list.push(handshake_msg_buf);
-
+  storeHandshakeData(reader, record_header.length, state);
   var type = reader.readBytes(1).readUInt8(0);
   var length = reader.readBytes(3).readUIntBE(0, 3);
   var version = reader.readBytes(2);
@@ -118,8 +137,7 @@ function parseCertificate(reader, state) {
     return null;
 
   var record_header = parseRecordHeader(reader);
-  var handshake_msg_buf = reader.peekBytes(0, record_header.length);
-  state.handshake_message_list.push(handshake_msg_buf);
+  storeHandshakeData(reader, record_header.length, state);
 
   var type = reader.readBytes(1).readUInt8(0);
   var length = reader.readBytes(3).readUIntBE(0, 3);
@@ -145,8 +163,7 @@ function parseServerHelloDone(reader, state) {
     return null;
 
   var record_header = parseRecordHeader(reader);
-  var handshake_msg_buf = reader.peekBytes(0, record_header.length);
-  state.handshake_message_list.push(handshake_msg_buf);
+  storeHandshakeData(reader, record_header.length, state);
 
   var type = reader.readBytes(1).readUInt8(0);
   var length = reader.readBytes(3).readUIntBE(0, 3);
@@ -154,8 +171,7 @@ function parseServerHelloDone(reader, state) {
   state.handshake.serverhellodone_json = {
     record_header: record_header,
     type: type,
-    length: length,
-    buf: handshake_msg_buf
+    length: length
   };
   return true;
 }
@@ -171,15 +187,20 @@ function parseServerFinished(reader, state) {
   var length = reader.readBytes(3).readUIntBE(0, 3);
   var verify_data = reader.readBytes(length);
 
+  // Calculate session hash
   var shasum = crypto.createHash('sha256');
   shasum.update(Buffer.concat(state.handshake_message_list));
   var message_hash = shasum.digest();
 
+  // Store Handshake data after hash caluclated
   state.handshake_message_list.push(handshake_msg_buf);
 
   var master_secret = state.keyblock_json.master_secret;
+
+  // obtain session hash
   var r = PRF12(master_secret, "server finished", message_hash, 12);
 
+  // Handshake integrity check
   assert(r.equals(verify_data));
 
   state.handshake.serverfinished_json = {
@@ -204,6 +225,7 @@ function parseApplicationData(reader) {
   };
 }
 
+// P_hash is defined in TLS1.2(RFC5246)
 exports.P_hash = P_hash;
 function P_hash(algo, secret, seed, size) {
   var result = (new Buffer(size)).fill(0);
@@ -231,18 +253,19 @@ function P_hash(algo, secret, seed, size) {
   return result;
 }
 
+// Pesuedo Random Function in TLS1.2 is sha256
 exports.PRF12 = PRF12;
 function PRF12(secret, label, seed, size) {
   var newSeed = Buffer.concat([new Buffer(label), seed]);
   return P_hash('sha256', secret, newSeed, size);
 }
 
+// Key Deviation Function for AES-128-GCM
 exports.KDF = KDF;
-function KDF(pre_master_secret, clienthello_json, serverhello_json) {
-  var client_random = clienthello_json.random;
-  var server_random = serverhello_json.random;
+function KDF(pre_master_secret, client_random, server_random) {
   var master_secret = PRF12(pre_master_secret, "master secret", Buffer.concat([client_random, server_random]), 48);
-  var key_block_reader = new DataReader(   // 40bytes key_block for AES-128-GCM
+  // 40 bytes key_block for AES-128-GCM
+  var key_block_reader = new DataReader(
     PRF12(master_secret, "key expansion", Buffer.concat([server_random, client_random]), 40));
 
   return {
@@ -278,6 +301,7 @@ function createChangeCipherSpec() {
 exports.createClientFinished = createClientFinished;
 function createClientFinished(json, state) {
   state.handshake.clientfinished_json = json;
+  // create session hash
   var shasum = crypto.createHash('sha256');
   shasum.update(Buffer.concat(json.handshake_message_list));
   var message_hash = shasum.digest();
@@ -291,53 +315,26 @@ function createApplicationData(data) {
   return createRecord(type.application, data);
 }
 
-exports.DecryptAEAD = DecryptAEAD;
-function DecryptAEAD(reader, state) {
-  if (!checkRecordHeader(reader))
-    return null;
-
-  var write_key = state.keyblock_json.server_write_key;
-  var write_iv = state.keyblock_json.server_write_IV;
-
-  var record_header_type_version = reader.peekBytes(0, 3);
-  var record_header = parseRecordHeader(reader);
-  var frame = reader.readBytes(record_header.length);
-  var nonce_explicit = frame.slice(0, 8);
-  var enc_data = frame.slice(8, frame.length - 16);
-  var record_header_length = new Buffer(2);
-  record_header_length.writeUInt16BE(enc_data.length);
-  var record_header_buf = Buffer.concat([record_header_type_version, record_header_length]);
-  var tag = frame.slice(-16);
-  var iv = Buffer.concat([write_iv.slice(0,4), nonce_explicit]);
-  var bob = crypto.createDecipheriv('aes-128-gcm', write_key, iv);
-  bob.setAuthTag(tag);
-  var aad = Buffer.concat([state.read_seq, record_header_buf]);
-  bob.setAAD(aad);
-  var clear = bob.update(enc_data);
-  var length = new Buffer(2);
-  length.writeUIntBE(clear.length, 0, 2);
-  bob.final();
-  incSeq(state.read_seq);
-  var buf = reader.readBytes(reader.bytesRemaining());
-  return new DataReader(Buffer.concat([record_header_type_version, length, clear, buf]));
-}
-
+// pre_master_secret used only in RSA KeyExchange
 exports.createPreMasterSecretRSAKeyExchange = createPreMasterSecretRSAKeyExchange;
-function createPreMasterSecretRSAKeyExchange(state) {
-  var pre_master_secret = Buffer.concat([state.handshake.clienthello_json.version, crypto.randomBytes(46)]);
+function createPreMasterSecretRSAKeyExchange(version) {
+  var pre_master_secret = Buffer.concat([version, crypto.randomBytes(46)]);
   return pre_master_secret;
 }
 
 exports.createKeyBlock = createKeyBlock;
-function createKeyBlock(pre_master_secret, state) {
-  var keyblock_json = KDF(pre_master_secret, state.handshake.clienthello_json, state.handshake.serverhello_json);
+function createKeyBlock(pre_master_secret, client_random, server_random) {
+  var keyblock_json = KDF(pre_master_secret, client_random, server_random);
   return keyblock_json;
 }
 
 exports.sendClientKeyExchange = sendClientKeyExchange;
 function sendClientKeyExchange(state) {
-  var pre_master_secret = createPreMasterSecretRSAKeyExchange(state);
-  state.keyblock_json = createKeyBlock(pre_master_secret, state);
+  var version = state.handshake.clienthello_json.version;
+  var client_random = state.handshake.clienthello_json.random;
+  var server_random = state.handshake.serverhello_json.random;
+  var pre_master_secret = createPreMasterSecretRSAKeyExchange(version);
+  state.keyblock_json = createKeyBlock(pre_master_secret, client_random, server_random);
   var clientkeyexchange_json = {
     pre_master_secret: pre_master_secret,
     pubkey: require('fs').readFileSync(__dirname + '/pubkey.pem')
@@ -350,6 +347,7 @@ exports.sendChangeCipherSpec = sendChangeCipherSpec;
 function sendChangeCipherSpec(state) {
   var changecipherspec = createChangeCipherSpec();
   sendTLSFrame(changecipherspec, state);
+  // After sending ChangeCipherSpec, sending frame is always encrypted.
   state.send_encrypted = true;
 }
 
@@ -363,12 +361,79 @@ function sendClientFinished(state) {
   sendTLSFrame(clientfinished, state);
 }
 
-exports.sendClientFrame = sendClientFrame;
-function sendClientFrame(state) {
-  sendClientKeyExchange(state);
-  sendChangeCipherSpec(state);
-  state.send_encrypted = true;
-  sendClientFinished(state);
+
+// DeCipher that supports only aes-128-gcm
+exports.Decrypt = Decrypt;
+function Decrypt(encrypted, aad, key, iv, tag) {
+  var decipher = crypto.createDecipheriv('aes-128-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  decipher.setAAD(aad);
+  var clear = decipher.update(encrypted);
+  decipher.final();
+  return clear;
+}
+
+exports.DecryptAEAD = DecryptAEAD;
+function DecryptAEAD(reader, state) {
+  if (!checkRecordHeader(reader))
+    return null;
+
+  var record_header = reader.readBytes(5);
+  var length = record_header.readUIntBE(3, 2);
+  var frame = reader.readBytes(length);
+  var nonce_explicit = frame.slice(0, 8);
+  var encrypted = frame.slice(8, frame.length - 16);
+  var tag = frame.slice(-16);
+
+  record_header.writeUIntBE(encrypted.length, 3, 2);
+
+  var write_key = state.keyblock_json.server_write_key;
+  var write_iv = state.keyblock_json.server_write_IV;
+  var iv = Buffer.concat([write_iv.slice(0,4), nonce_explicit]);
+  var aad = Buffer.concat([state.read_seq, record_header]);
+  var clear = Decrypt(encrypted, aad, write_key, iv, tag);
+
+  // re-calculate length with removing nonce_explict and tag length
+  record_header.writeUIntBE(clear.length, 3, 2);
+
+  // increment read sequence number
+  incSeq(state.read_seq);
+
+  return new DataReader(Buffer.concat(
+    [record_header, clear, reader.readBytes(reader.bytesRemaining())]
+  ));
+}
+
+// Cipher that supports only aes-128-gcm
+exports.Encrypt = Encrypt;
+function Encrypt(plain, key, iv, aad) {
+  var cipher = crypto.createCipheriv('aes-128-gcm', key, iv);
+  cipher.setAAD(aad);
+  var encrypted1 = cipher.update(plain);
+  var encrypted2 = cipher.final();
+  var encrypted = Buffer.concat([encrypted1, encrypted2]);
+  var tag = cipher.getAuthTag(tag);
+  return {encrypted: encrypted, tag: tag};
+}
+
+exports.EncryptAEAD = EncryptAEAD;
+function EncryptAEAD(frame, state) {
+  var key = state.keyblock_json.client_write_key;
+  var iv = Buffer.concat([state.keyblock_json.client_write_IV.slice(0,4), state.nonce_explicit]);
+  var record_header = frame.slice(0, 5);
+  var aad = Buffer.concat([state.write_seq, record_header]);
+
+  var ret = Encrypt(frame.slice(5), key, iv, aad);
+  var encrypted = ret.encrypted;
+  var tag = ret.tag;
+
+  // re-calcuate length with adding nonce_explit and tag length
+  var length = state.nonce_explicit.length + encrypted.length + tag.length;
+  record_header.writeUIntBE(length, 3, 2);
+
+  // increment write sequence number
+  incSeq(state.write_seq);
+  return Buffer.concat([record_header, state.nonce_explicit, encrypted, tag]);
 }
 
 exports.sendTLSFrame = sendTLSFrame;
@@ -382,18 +447,10 @@ function sendTLSFrame(frame, state) {
   state.socket.write(frame);
 }
 
-exports.EncryptAEAD = EncryptAEAD;
-function EncryptAEAD(frame, state) {
-  var iv = Buffer.concat([state.keyblock_json.client_write_IV.slice(0,4), state.nonce_explicit]);
-  var bob = crypto.createCipheriv('aes-128-gcm', state.keyblock_json.client_write_key, iv);
-  var record_header = frame.slice(0, 5);
-  var aad = Buffer.concat([state.write_seq, record_header]);
-  bob.setAAD(aad);
-  var encrypted1 = bob.update(frame.slice(5));
-  var encrypted2 = bob.final();
-  var encrypted = Buffer.concat([encrypted1, encrypted2]);
-  var tag = bob.getAuthTag(tag);
-  incSeq(state.write_seq);
-  record_header.writeUIntBE(state.nonce_explicit.length + encrypted.length + tag.length, 3, 2);
-  return Buffer.concat([record_header, state.nonce_explicit, encrypted, tag]);
+// send all client's Handshake after receiving Certificate
+exports.sendClientFrame = sendClientFrame;
+function sendClientFrame(state) {
+  sendClientKeyExchange(state);
+  sendChangeCipherSpec(state);
+  sendClientFinished(state);
 }
