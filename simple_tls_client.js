@@ -17,7 +17,7 @@ function TLSState(socket, is_server) {
   this.keyblock = {};
   this.handshake_message_list = [];
   this.handshake = {};
-  this.nonce_explicit = crypto.randomBytes(8);
+  this.nonce_explicit = Buffer.concat([crypto.randomBytes(2), (new Buffer(6)).fill(0)]);
   this.write_seq = (new Buffer(8)).fill(0);
   this.read_seq = (new Buffer(8)).fill(0);
 }

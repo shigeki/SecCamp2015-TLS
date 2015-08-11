@@ -431,7 +431,12 @@ function EncryptAEAD(frame, state) {
 
   // increment write sequence number
   incSeq(state.write_seq);
-  return Buffer.concat([record_header, state.nonce_explicit, encrypted, tag]);
+
+  var buf = Buffer.concat([record_header, state.nonce_explicit, encrypted, tag]);
+
+  // increment nonce_explicit
+  incSeq(state.nonce_explicit);
+  return buf;
 }
 
 exports.sendTLSFrame = sendTLSFrame;
