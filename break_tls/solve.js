@@ -9,7 +9,9 @@ var clientkeyexchange = new Buffer(handshake.ClientKeyExchange, 'hex');
 var encryptedApplicationData = new Buffer(handshake.EncryptedApplicationData, 'hex');
 // obtain handshake parameters
 var client_random = clienthello.slice(11, 11+32);
+console.log(client_random);
 var server_random = serverhello.slice(11, 11+32);
+console.log(server_random);
 var encrypted_pre_master_secret = clientkeyexchange.slice(11);
 // obtain private key
 var private_key = fs.readFileSync(__dirname + '/server.key');
